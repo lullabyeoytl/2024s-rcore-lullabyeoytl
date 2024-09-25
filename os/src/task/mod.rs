@@ -14,6 +14,9 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+
+use crate::timer::get_time_us;
+use crate::config::MAX_SYSCALL_NUM;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
@@ -54,6 +57,9 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times:[0;MAX_SYSCALL_NUM] ,
+            syscall_count:0,
+            start_time: get_time_us(),
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -134,6 +140,18 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+    //Get index of current running task
+    fn current_task_index(&self)-> usize{
+        let inner = self.inner.exclusive_access();
+        inner.current_task
+    }
+    // Get current task 
+    /// 该方法返回当前正在运行任务的 `TaskControlBlock`。
+    pub fn get_current_task (&self) -> TaskControlBlock{
+        let index = self.current_task_index();
+        let inner = self.inner.exclusive_access();
+        inner.tasks[index]
     }
 }
 

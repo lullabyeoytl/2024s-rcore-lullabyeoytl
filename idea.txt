@@ -1,0 +1,68 @@
+为了实现 sys_task_info 系统调用，我们需要遵循几个步骤，
+并对现有的结构进行一定的修改，以确保我们能够跟踪当前任务的状态、
+系统调用次数以及从第一次调度开始到现在的运行时间。
+
+步骤概述
+修改 TaskControlBlock 结构： 
+在 TaskControlBlock 中添加字段来记录系统调用次数及相关信息。
+
+实现 sys_task_info 函数： 该函数需要填充 TaskInfo 结构，并返回给调用者。
+
+维护系统调用次数： 在系统调用进入内核时增加调用次数的逻辑。
+
+详细实现步骤
+1. 修改 TaskControlBlock
+我们需要确保 TaskControlBlock（假设其结构已经存在）能够记录系统调用的信息。
+在 TaskControlBlock 中，可以添加如下字段：
+
+pub struct TaskControlBlock {
+    // 原有字段...
+    syscall_times: [u32; MAX_SYSCALL_NUM],
+    syscall_count: u32,
+    start_time: usize, // 记录任务首次被调度的时刻
+}
+DiffCopyInsert
+2. 实现 sys_task_info 函数
+实现 sys_task_info 函数以填充 TaskInfo 结构：
+
+fn sys_task_info(ti: *mut TaskInfo) -> isize {
+    // 获取当前任务的控制块
+    let current_task = get_current_task(); // 获取当前任务的索引或指针
+    let current_tcb = &mut TASK_MANAGER.inner.tasks[current_task];
+
+    // 获取当前系统时间
+    let current_time = get_time(); // 假定以毫秒为单位
+    let elapsed_time = current_time - current_tcb.start_time; // 计算运行时间
+
+    // 填充任务信息
+    let info = unsafe { &mut *ti }; // 将指针转换为引用
+    info.status = TaskStatus::Running; // 当前任务状态
+    info.syscall_times = current_tcb.syscall_times; // 拷贝系统调用次数
+    info.time = elapsed_time; // 设置运行时间
+
+    // 增加系统调用计数
+    current_tcb.syscall_count += 1; // 增加系统调用计数
+    current_tcb.syscall_times[syscall_id as usize] += 1; // 假设 syscall_id 能够在范围内
+    
+    0 // 返回成功
+}
+DiffCopyInsert
+3. 维护系统调用次数
+在系统调用异常处理和进入具体系统调用函数的地方，我们需要维护系统调用计数。可以在调用 syscall 处理的函数开头增加如下逻辑：
+
+fn syscall_handler(syscall_id: usize, args: &[usize]) -> isize {
+    let current_task = get_current_task();
+    let current_tcb = &mut TASK_MANAGER.inner.tasks[current_task];
+
+    // 增加系统调用次数
+    current_tcb.syscall_count += 1;
+    
+    // 其他处理逻辑
+}
+DiffCopyInsert
+可能的问题与解决方案
+在内核采用桶计数的方式进行维护可能会遇到以下问题：
+
+数据竞争：在多个任务并发执行时，可能导致数据的不一致。
+灵活性不足：如果系统调用编号少于500，使用数组可能会造成空间浪费。
+为了解决这个问题，我们可以使用某种形式的散列结构（如 HashMap）来灵活维护系统调用计数。这种结构能有效处理系统调用的增加与减少，同时避免在数组中造成的内存浪费。
