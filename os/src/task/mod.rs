@@ -15,14 +15,13 @@ mod switch;
 mod task;
 
 
-use crate::timer::get_time_us;
-use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_ms;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus,TaskInfo};
 
 pub use context::TaskContext;
 
@@ -57,9 +56,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
-            syscall_times:[0;MAX_SYSCALL_NUM] ,
-            syscall_count:0,
-            start_time: get_time_us(),
+            task_info: TaskInfo::new(TaskStatus::UnInit),
+            start_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -86,6 +84,8 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        //when the task is switched , record the start time of the task
+        task0.start_time = get_time_ms();
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -141,17 +141,31 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
-    //Get index of current running task
-    fn current_task_index(&self)-> usize{
-        let inner = self.inner.exclusive_access();
-        inner.current_task
+
+    fn update_task_info(&self, syscall:usize, add_check: bool){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task_status = inner.tasks[current].task_status;
+        inner.tasks[current].task_info.set_status(task_status);
+        if add_check{
+            inner.tasks[current].task_info.add_syscall_time(syscall);
+        }
     }
-    // Get current task 
-    /// 该方法返回当前正在运行任务的 `TaskControlBlock`。
-    pub fn get_current_task (&self) -> TaskControlBlock{
-        let index = self.current_task_index();
-        let inner = self.inner.exclusive_access();
-        inner.tasks[index]
+    
+    pub fn get_task_info(&self) -> TaskInfo {
+        //! pay attention to the false here, sys_task_info only use data but not syscall the task
+        self.update_task_info(0,false);
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let increment_time = get_time_ms()-0;
+        //println!("[Kernel][Task] get_time_ms = {}", get_time_ms());
+        //println!("[Kernel][Task] task_start_time = {}", task_start_time);
+        //println!("[Kernel][Task] increment_time = {}", increment_time);
+        
+        inner.tasks[current].task_info.set_time(increment_time);
+        let task_info = inner.tasks[current].task_info;
+
+        task_info
     }
 }
 
@@ -186,4 +200,12 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+/// Get the current task's information.
+pub fn get_current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_task_info()
+}
+/// Add the current task's syscall time to the task information.
+pub fn add_task_syscall_times(syscall:usize){
+    TASK_MANAGER.update_task_info(syscall,true);
 }
